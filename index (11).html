@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Snake</title>
+<style>
+:root{
+  --bg:#EEF3E8; --ink:#1F2A22; --muted:#5C6B5F;
+  --tile-a:#CFE3C4; --tile-b:#C4DBB7;
+  --snake:#2B3A8C; --snake-head:#1B2670; --food:#E4572E;
+  --btn:#2B3A8C; --btn-ink:#fff; --panel:#DDE8D5;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#16211C; --ink:#E6EFE6; --muted:#9BB0A1;
+    --tile-a:#22352C; --tile-b:#1E2F27;
+    --snake:#9FB4FF; --snake-head:#C9D5FF; --food:#FF8A5B;
+    --btn:#9FB4FF; --btn-ink:#16211C; --panel:#223229;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#16211C; --ink:#E6EFE6; --muted:#9BB0A1;
+  --tile-a:#22352C; --tile-b:#1E2F27;
+  --snake:#9FB4FF; --snake-head:#C9D5FF; --food:#FF8A5B;
+  --btn:#9FB4FF; --btn-ink:#16211C; --panel:#223229;
+}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{
+  margin:0; min-height:100vh; background:var(--bg); color:var(--ink);
+  font-family:ui-rounded,"Trebuchet MS","Segoe UI",system-ui,sans-serif;
+  display:flex; flex-direction:column; align-items:center; gap:14px;
+  padding:18px 12px 24px;
+}
+h1{margin:0; font-size:1.9rem; letter-spacing:.02em}
+.stats{display:flex; gap:12px; width:min(92vw,420px)}
+.stat{flex:1; background:var(--panel); border-radius:12px; padding:8px 12px}
+.stat span{display:block; font-size:.78rem; color:var(--muted)}
+.stat b{font-size:1.4rem}
+.board{position:relative; width:min(92vw,420px); aspect-ratio:1; border-radius:14px; overflow:hidden}
+canvas{display:block; width:100%; height:100%; touch-action:none}
+.overlay{
+  position:absolute; inset:0; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:10px; text-align:center;
+  background:color-mix(in srgb,var(--bg) 78%,transparent); padding:16px;
+}
+.overlay.hide{display:none}
+.overlay h2{margin:0; font-size:1.5rem}
+.overlay p{margin:0; color:var(--muted); max-width:30ch}
+button{
+  font:inherit; font-weight:700; border:0; border-radius:12px; cursor:pointer;
+  background:var(--btn); color:var(--btn-ink); padding:10px 22px;
+}
+button:focus-visible{outline:3px solid var(--food); outline-offset:2px}
+.pad{display:grid; grid-template-columns:repeat(3,64px); grid-template-rows:repeat(2,56px); gap:8px}
+.pad button{padding:0; font-size:1.4rem}
+.pad .up{grid-column:2; grid-row:1}
+.pad .left{grid-column:1; grid-row:2}
+.pad .down{grid-column:2; grid-row:2}
+.pad .right{grid-column:3; grid-row:2}
+.hint{margin:0; color:var(--muted); font-size:.85rem; text-align:center; max-width:36ch}
+</style>
+</head>
+<body>
+<h1>Snake</h1>
+<div class="stats">
+  <div class="stat"><span>Score</span><b id="score">0</b></div>
+  <div class="stat"><span>Best</span><b id="best">0</b></div>
+</div>
+<div class="board">
+  <canvas id="c" aria-label="Snake game board"></canvas>
+  <div class="overlay" id="overlay">
+    <h2 id="title">Ready?</h2>
+    <p id="msg">Eat the food, avoid the walls and your own tail.</p>
+    <button id="start">Play</button>
+  </div>
+</div>
+<div class="pad" aria-label="Direction controls">
+  <button class="up" data-d="up" aria-label="Up">▲</button>
+  <button class="left" data-d="left" aria-label="Left">◀</button>
+  <button class="down" data-d="down" aria-label="Down">▼</button>
+  <button class="right" data-d="right" aria-label="Right">▶</button>
+</div>
+<p class="hint">Arrow keys or WASD to steer, Space to pause. On a phone, swipe on the board or use the buttons.</p>
+
+<script>
+(function(){
+  var N = 20;
+  var canvas = document.getElementById('c');
+  var ctx = canvas.getContext('2d');
+  var overlay = document.getElementById('overlay');
+  var titleEl = document.getElementById('title');
+  var msgEl = document.getElementById('msg');
+  var startBtn = document.getElementById('start');
+  var scoreEl = document.getElementById('score');
+  var bestEl = document.getElementById('best');
+  var DIRS = {up:[0,-1], down:[0,1], left:[-1,0], right:[1,0]};
+
+  var snake, dir, queue, food, score, best = 0, state = 'idle', timer = null;
+
+  try { best = parseInt(localStorage.getItem('snake-best'), 10) || 0; } catch (e) {}
+  bestEl.textContent = best;
+
+  function size(){
+    var r = canvas.getBoundingClientRect();
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(r.width * dpr);
+    canvas.height = Math.round(r.height * dpr);
+    draw();
+  }
+  window.addEventListener('resize', size);
+
+  function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+  function reset(){
+    snake = [{x:10,y:10},{x:9,y:10},{x:8,y:10}];
+    dir = 'right'; queue = []; score = 0;
+    scoreEl.textContent = 0;
+    placeFood();
+  }
+
+  function placeFood(){
+    var free = [];
+    for (var x = 0; x < N; x++) for (var y = 0; y < N; y++) {
+      if (!snake.some(function(s){ return s.x === x && s.y === y; })) free.push({x:x,y:y});
+    }
+    food = free.length ? free[Math.floor(Math.random() * free.length)] : null;
+  }
+
+  function speed(){ return Math.max(70, 140 - score * 3); }
+
+  function turn(d){
+    if (state === 'idle' || state === 'over') return;
+    var last = queue.length ? queue[queue.length - 1] : dir;
+    var a = DIRS[d], b = DIRS[last];
+    if (a[0] + b[0] === 0 && a[1] + b[1] === 0) return; // no reversing
+    if (d === last) return;
+    if (queue.length < 2) queue.push(d);
+    if (state === 'paused') resume();
+  }
+
+  function tick(){
+    if (queue.length) dir = queue.shift();
+    var v = DIRS[dir];
+    var head = {x: snake[0].x + v[0], y: snake[0].y + v[1]};
+    var eating = food && head.x === food.x && head.y === food.y;
+    var body = eating ? snake : snake.slice(0, -1);
+    var hitWall = head.x < 0 || head.y < 0 || head.x >= N || head.y >= N;
+    var hitSelf = body.some(function(s){ return s.x === head.x && s.y === head.y; });
+    if (hitWall || hitSelf) return gameOver();
+    snake.unshift(head);
+    if (eating) {
+      score++; scoreEl.textContent = score;
+      placeFood();
+      if (!food) return gameOver(true);
+    } else {
+      snake.pop();
+    }
+    draw();
+    timer = setTimeout(tick, speed());
+  }
+
+  function begin(){
+    clearTimeout(timer);
+    reset(); state = 'running';
+    overlay.classList.add('hide');
+    draw();
+    timer = setTimeout(tick, speed());
+  }
+
+  function pause(){
+    if (state !== 'running') return;
+    state = 'paused'; clearTimeout(timer);
+    titleEl.textContent = 'Paused';
+    msgEl.textContent = 'Press Space or any direction to continue.';
+    startBtn.textContent = 'Resume';
+    overlay.classList.remove('hide');
+  }
+
+  function resume(){
+    if (state !== 'paused') return;
+    state = 'running';
+    overlay.classList.add('hide');
+    timer = setTimeout(tick, speed());
+  }
+
+  function gameOver(won){
+    state = 'over'; clearTimeout(timer);
+    if (score > best) {
+      best = score; bestEl.textContent = best;
+      try { localStorage.setItem('snake-best', String(best)); } catch (e) {}
+    }
+    titleEl.textContent = won ? 'You filled the board!' : 'Game over';
+    msgEl.textContent = 'Score: ' + score + '. Best: ' + best + '.';
+    startBtn.textContent = 'Play again';
+    overlay.classList.remove('hide');
+    draw();
+  }
+
+  function draw(){
+    if (!snake) reset();
+    var w = canvas.width, c = w / N;
+    var a = css('--tile-a'), b = css('--tile-b');
+    for (var x = 0; x < N; x++) for (var y = 0; y < N; y++) {
+      ctx.fillStyle = (x + y) % 2 ? a : b;
+      ctx.fillRect(x * c, y * c, c + 1, c + 1);
+    }
+    if (food) {
+      ctx.fillStyle = css('--food');
+      ctx.beginPath();
+      ctx.arc((food.x + .5) * c, (food.y + .5) * c, c * .36, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    var body = css('--snake'), headC = css('--snake-head'), pad = c * .08;
+    snake.forEach(function(s, i){
+      ctx.fillStyle = i === 0 ? headC : body;
+      var r = c * (i === 0 ? .3 : .22);
+      var x0 = s.x * c + pad, y0 = s.y * c + pad, sz = c - pad * 2;
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(x0, y0, sz, sz, r); else ctx.rect(x0, y0, sz, sz);
+      ctx.fill();
+    });
+    // eyes
+    var h = snake[0], v = DIRS[dir], e = c * .12;
+    var cx = (h.x + .5) * c + v[0] * c * .12, cy = (h.y + .5) * c + v[1] * c * .12;
+    var px = -v[1] * c * .17, py = v[0] * c * .17;
+    ctx.fillStyle = css('--bg');
+    [[1],[-1]].forEach(function(k){
+      ctx.beginPath();
+      ctx.arc(cx + px * k[0], cy + py * k[0], e, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
+
+  // Keyboard
+  var KEYS = {ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right', w:'up', s:'down', a:'left', d:'right', W:'up', S:'down', A:'left', D:'right'};
+  document.addEventListener('keydown', function(e){
+    if (KEYS[e.key]) {
+      e.preventDefault();
+      if (state === 'idle' || state === 'over') return begin();
+      turn(KEYS[e.key]);
+    } else if (e.key === ' ') {
+      e.preventDefault();
+      if (state === 'running') pause();
+      else if (state === 'paused') resume();
+      else begin();
+    }
+  });
+
+  // Buttons
+  startBtn.addEventListener('click', function(){ state === 'paused' ? resume() : begin(); });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-d]'), function(btn){
+    btn.addEventListener('click', function(){
+      if (state === 'idle' || state === 'over') return begin();
+      turn(btn.dataset.d);
+    });
+  });
+
+  // Swipe
+  var sx = 0, sy = 0;
+  canvas.addEventListener('touchstart', function(e){
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+  }, {passive:true});
+  canvas.addEventListener('touchend', function(e){
+    var t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
+    turn(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
+  }, {passive:true});
+
+  document.addEventListener('visibilitychange', function(){ if (document.hidden) pause(); });
+
+  reset(); size();
+})();
+</script>
+</body>
+</html>
